@@ -17,3 +17,12 @@ Thumbs.db
 __pycache__/
 .venv/
 .pytest_cache/
+
+# Generated AI-agent skill files
+**/.agents/skills/
+**/.claude/skills/
+**/.windsurf/skills/
+**/skills-lock.json
+
+# TypeScript build cache
+*.tsbuildinfo
