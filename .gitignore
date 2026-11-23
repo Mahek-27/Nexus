@@ -26,3 +26,6 @@ __pycache__/
 
 # TypeScript build cache
 *.tsbuildinfo
+
+# Generated Prisma client
+apps/api/src/generated/

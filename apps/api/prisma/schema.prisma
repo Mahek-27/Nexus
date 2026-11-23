@@ -1,13 +1,492 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
 }
 
 datasource db {
   provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum RepositoryRole {
+  VIEWER
+  ANALYST
+  ADMIN
+}
+
+enum PullRequestState {
+  OPEN
+  CLOSED
+  MERGED
+}
+
+enum AnalysisType {
+  FULL_SCAN
+  PR_SCAN
+}
+
+enum AnalysisStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum FindingSeverity {
+  INFO
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ArtifactType {
+  SARIF
+  JSON
+  LOG
+}
+
+enum JobType {
+  SYNC_REPOSITORY
+  ANALYZE_REPOSITORY
+  ANALYZE_PR
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum JobAttemptStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum WebhookStatus {
+  RECEIVED
+  PROCESSING
+  PROCESSED
+  FAILED
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+// ─────────────────────────────────────────────
+// IDENTITY AND ACCESS MANAGEMENT
+// ─────────────────────────────────────────────
+
+model User {
+  id            String   @id @default(uuid()) @db.Uuid
+  name          String?
+  email         String   @unique
+  emailVerified DateTime
+  image         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  accounts Account[]
+  sessions Session[]
+
+  repositoryInvitationsReceived RepositoryInvitation[] @relation("InvitationInvitee")
+  repositoryInvitationsSent     RepositoryInvitation[] @relation("InvitationInviter")
+
+  repositories Repository[]       @relation("RepositoryOwner")
+  memberships  RepositoryMember[] @relation("MemberUser")
+  invitations  RepositoryMember[] @relation("MemberInviter")
+
+  analyses Analysis[] @relation("AnalysisRequester")
+  jobs     Job[]      @relation("JobRequester")
+
+  @@index([createdAt])
+}
+
+model Account {
+  id                String @id @default(uuid()) @db.Uuid
+  userId            String @db.Uuid
+  provider          String @default("github")
+  providerAccountId String
+
+  accessToken  String? // Encrypted by application
+  refreshToken String? // Encrypted by application
+  expiresAt    DateTime?
+  scope        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @db.Uuid
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ─────────────────────────────────────────────
+// REPOSITORY MANAGEMENT
+// ─────────────────────────────────────────────
+
+model Repository {
+  id          String @id @default(uuid()) @db.Uuid
+  ownerUserId String @db.Uuid
+
+  provider   String @default("github")
+  externalId BigInt
+
+  name          String
+  fullName      String
+  description   String?
+  url           String
+  defaultBranch String?
+
+  isPrivate  Boolean
+  isArchived Boolean @default(false)
+
+  lastSyncedAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  owner User @relation("RepositoryOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+
+  members       RepositoryMember[]
+  invitations   RepositoryInvitation[]
+  branches      Branch[]
+  commits       Commit[]
+  pullRequests  PullRequest[]
+  analyses      Analysis[]
+  jobs          Job[]
+  webhookEvents WebhookEvent[]
+
+  @@unique([provider, externalId])
+  @@index([ownerUserId])
+  @@index([fullName])
+  @@index([lastSyncedAt])
+}
+
+model RepositoryMember {
+  id           String         @id @default(uuid()) @db.Uuid
+  repositoryId String         @db.Uuid
+  userId       String         @db.Uuid
+  invitedById  String?        @db.Uuid
+  role         RepositoryRole @default(VIEWER)
+  createdAt    DateTime       @default(now())
+
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  user User @relation("MemberUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  invitedBy User? @relation("MemberInviter", fields: [invitedById], references: [id], onDelete: SetNull)
+
+  @@unique([repositoryId, userId])
+  @@index([userId])
+  @@index([invitedById])
+}
+
+model RepositoryInvitation {
+  id            String  @id @default(uuid()) @db.Uuid
+  repositoryId  String  @db.Uuid
+  inviteeUserId String  @db.Uuid
+  invitedById   String? @db.Uuid
+
+  role   RepositoryRole   @default(VIEWER)
+  status InvitationStatus @default(PENDING)
+
+  expiresAt   DateTime
+  respondedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  invitee User @relation("InvitationInvitee", fields: [inviteeUserId], references: [id], onDelete: Cascade)
+
+  invitedBy User? @relation("InvitationInviter", fields: [invitedById], references: [id], onDelete: SetNull)
+
+  @@index([repositoryId, inviteeUserId, status])
+  @@index([inviteeUserId, status])
+  @@index([expiresAt, status])
+}
+
+model Branch {
+  id           String @id @default(uuid()) @db.Uuid
+  repositoryId String @db.Uuid
+
+  name      String
+  headSha   String?
+  isDefault Boolean @default(false)
+
+  lastSyncedAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@unique([repositoryId, name])
+  @@index([repositoryId, isDefault])
+}
+
+model Commit {
+  id           String @id @default(uuid()) @db.Uuid
+  repositoryId String @db.Uuid
+
+  sha         String
+  message     String    @db.Text
+  authorName  String?
+  authorEmail String?
+  committedAt DateTime?
+  url         String?
+
+  createdAt DateTime @default(now())
+
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@unique([repositoryId, sha])
+  @@index([repositoryId, committedAt])
+}
+
+model PullRequest {
+  id           String @id @default(uuid()) @db.Uuid
+  repositoryId String @db.Uuid
+
+  number      Int
+  title       String
+  description String?          @db.Text
+  state       PullRequestState @default(OPEN)
+
+  sourceBranch String
+  targetBranch String
+  headSha      String?
+  baseSha      String?
+
+  authorLogin String?
+  url         String
+
+  openedAt  DateTime?
+  closedAt  DateTime?
+  mergedAt  DateTime?
+  updatedAt DateTime  @updatedAt
+
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  analyses Analysis[]
+  jobs     Job[]
+
+  @@unique([repositoryId, number])
+  @@index([repositoryId, state])
+  @@index([repositoryId, updatedAt])
+}
+
+// ─────────────────────────────────────────────
+// CODE ANALYSIS
+// ─────────────────────────────────────────────
+
+model Analysis {
+  id            String  @id @default(uuid()) @db.Uuid
+  repositoryId  String  @db.Uuid
+  requestedById String? @db.Uuid
+  pullRequestId String? @db.Uuid
+
+  branchName String?
+  commitSha  String
+  type       AnalysisType
+  status     AnalysisStatus @default(PENDING)
+
+  startedAt    DateTime?
+  completedAt  DateTime?
+  errorMessage String?   @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Restrict)
+
+  requestedBy User? @relation("AnalysisRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+
+  pullRequest PullRequest? @relation(fields: [pullRequestId], references: [id], onDelete: SetNull)
+
+  findings  Finding[]
+  artifacts AnalysisArtifact[]
+  report    Report?
+  job       Job?
+
+  @@index([repositoryId, createdAt])
+  @@index([repositoryId, status])
+  @@index([requestedById])
+  @@index([pullRequestId])
+  @@index([commitSha])
+}
+
+model Finding {
+  id         String @id @default(uuid()) @db.Uuid
+  analysisId String @db.Uuid
+
+  ruleId   String
+  severity FindingSeverity
+  category String
+
+  title       String
+  description String @db.Text
+
+  filePath  String
+  startLine Int?
+  endLine   Int?
+
+  fingerprint String
+  tool        String
+
+  createdAt DateTime @default(now())
+
+  analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+
+  @@unique([analysisId, fingerprint])
+  @@index([analysisId, severity])
+  @@index([filePath])
+  @@index([ruleId])
+}
+
+model AnalysisArtifact {
+  id         String @id @default(uuid()) @db.Uuid
+  analysisId String @db.Uuid
+
+  type        ArtifactType
+  storageKey  String
+  contentHash String?
+  sizeBytes   BigInt?
+
+  createdAt DateTime @default(now())
+
+  analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+
+  @@index([analysisId])
+}
+
+model Report {
+  id         String @id @default(uuid()) @db.Uuid
+  analysisId String @unique @db.Uuid
+
+  summary String? @db.Text
+
+  totalFindings Int @default(0)
+  criticalCount Int @default(0)
+  highCount     Int @default(0)
+  mediumCount   Int @default(0)
+  lowCount      Int @default(0)
+  infoCount     Int @default(0)
+
+  generatedAt DateTime @default(now())
+
+  analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+}
+
+// ─────────────────────────────────────────────
+// BACKGROUND JOB PROCESSING
+// ─────────────────────────────────────────────
+
+model Job {
+  id            String  @id @default(uuid()) @db.Uuid
+  repositoryId  String? @db.Uuid
+  requestedById String? @db.Uuid
+  analysisId    String? @unique @db.Uuid
+  pullRequestId String? @db.Uuid
+
+  type     JobType
+  status   JobStatus @default(QUEUED)
+  priority Int       @default(0)
+
+  payload   Json
+  dedupeKey String? @unique
+
+  attemptsMade Int @default(0)
+  maxAttempts  Int @default(3)
+
+  availableAt DateTime  @default(now())
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  repository  Repository?  @relation(fields: [repositoryId], references: [id], onDelete: Restrict)
+  requestedBy User?        @relation("JobRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+  analysis    Analysis?    @relation(fields: [analysisId], references: [id], onDelete: SetNull)
+  pullRequest PullRequest? @relation(fields: [pullRequestId], references: [id], onDelete: SetNull)
+
+  attempts JobAttempt[]
+
+  @@index([status, priority, availableAt])
+  @@index([repositoryId, createdAt])
+  @@index([requestedById])
+  @@index([pullRequestId])
+}
+
+model JobAttempt {
+  id    String @id @default(uuid()) @db.Uuid
+  jobId String @db.Uuid
+
+  attemptNumber Int
+  status        JobAttemptStatus @default(RUNNING)
+
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  errorMessage String? @db.Text
+  durationMs   Int?
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, attemptNumber])
+  @@index([jobId, status])
+}
+
+// ─────────────────────────────────────────────
+// GITHUB WEBHOOK PROCESSING
+// ─────────────────────────────────────────────
+
+model WebhookEvent {
+  id         String @id @default(uuid()) @db.Uuid
+  deliveryId String @unique
+
+  eventType String
+  action    String?
+
+  repositoryId String? @db.Uuid
+  payload      Json
+
+  status WebhookStatus @default(RECEIVED)
+
+  receivedAt   DateTime  @default(now())
+  processedAt  DateTime?
+  errorMessage String?   @db.Text
+
+  repository Repository? @relation(fields: [repositoryId], references: [id], onDelete: SetNull)
+
+  @@index([status, receivedAt])
+  @@index([repositoryId, receivedAt])
 }

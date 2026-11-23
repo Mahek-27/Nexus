@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "nexus",
   "version": "1.0.0",
   "private": true,
@@ -15,5 +15,12 @@
   },
   "devDependencies": {
     "turbo": "^2.5.0"
+  },
+  "dependencies": {
+    "@nestjs/common": "^12.6.0",
+    "@nestjs/core": "^12.6.0",
+    "@prisma/client": "^7.10.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2"
   }
 }
